@@ -20,6 +20,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
       entities: [__dirname + '/**/*.entity{.ts,.js}'],
       autoLoadEntities: true,
       synchronize: true,
+      poolSize: 15,
     }),
     ImoveisModule,
   ],
