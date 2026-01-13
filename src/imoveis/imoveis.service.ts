@@ -86,8 +86,8 @@ export class ImoveisService {
       ) as unknown as ImovelSmartResponseDto[];
       // Mapea a urlFotoDestaque para o foto destaque da lista de fotos se for NULL
       imoveis = imoveis.map(imovel => {
-        if (!imovel.urlFotoDestaque) {
-          imovel.urlFotoDestaque = imovel.fotoImovelList.find(foto => foto.destaque === 1)?.url || imovel.fotoImovelList[0].url || '';
+        if (!imovel.urlFotoDestaque && imovel.fotoImovelList) {
+          imovel.urlFotoDestaque = imovel.fotoImovelList.find(foto => foto.destaque === 1)?.url || imovel.fotoImovelList[0]?.url || '';
         }
         return imovel;
       });
