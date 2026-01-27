@@ -10,7 +10,7 @@ async function bootstrap() {
     origin: [
       'http://localhost:4200', // Angular dev server
       'http://localhost:3000', // Seu frontend rodando em outra porta, se for o caso
-      'https://adm.jairorocha.com.br/'
+      'https://adm.jairorocha.com.br'
     ],
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
