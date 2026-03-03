@@ -48,4 +48,5 @@ export enum TipoPadraoImovelId {
   Popular = 1,
   AltoPadrao = 3,
   MedioPadrao = 2,
+  Luxo = 4,
 }
