@@ -222,6 +222,12 @@ export const tipoPadraoImoveis: TipoPadraoImovel[] = [
     slug: 'medio-padrao',
     descricao: 'Imóveis com padrão Médio Padrão.',
   },
+  {
+    id: TipoPadraoImovelId.Luxo,
+    nome: 'Luxo',
+    slug: 'luxo',
+    descricao: 'Imóveis com padrão Luxo.',
+  },
 ];
 
 // Helper functions to get items by ID
