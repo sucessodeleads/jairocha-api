@@ -39,7 +39,7 @@ export class SmartApiService {
       ...(destaqueNoSite !== undefined && { destaqueNoSite }),
     };
 
-    this.logger.log(`Filtros para busca na Smart API: ${JSON.stringify(params)}`);
+    this.logger.log(`Filtros para busca na Smart API: ${JSON.stringify({ ...params, token: '[redacted]' })}`);
     
     const response = await firstValueFrom(
       this.httpService.get<{ imoveis: any[] }>(this.apiUrlSmart, {
@@ -66,7 +66,7 @@ export class SmartApiService {
       codigos,
     };
 
-    this.logger.log(`Filtros para busca na Smart API: ${JSON.stringify(params)}`);
+    this.logger.log(`Filtros para busca na Smart API: ${JSON.stringify({ ...params, token: '[redacted]' })}`);
     
     const response = await firstValueFrom(
       this.httpService.get<{ imoveis: any[] }>(this.apiUrlSmartOne, {params}).pipe(
