@@ -1,35 +1,7 @@
-import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
-import { AppModule } from './app.module';
+import { createApp } from './create-app';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
-  
-  // Enable CORS
-  app.enableCors({
-    origin: [
-      'http://localhost:4200', // Angular dev server
-      'http://localhost:3000', // Seu frontend rodando em outra porta, se for o caso
-      'https://jairorocha.com.br',
-      'https://www.jairorocha.com.br',
-      'https://adm.jairorocha.com.br'
-    ],
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    credentials: true,
-    allowedHeaders: 'Content-Type, Accept, Authorization',
-  });
-  
-  // Enable global validation pipe with transform options
-  app.useGlobalPipes(
-    new ValidationPipe({
-      transform: true,
-      transformOptions: {
-        enableImplicitConversion: true,
-      },
-      whitelist: true,
-    }),
-  );
-  
+  const app = await createApp();
   await app.listen(process.env.PORT ?? 3000, '0.0.0.0');
   console.log(`Application is running on: ${await app.getUrl()}`);
 }

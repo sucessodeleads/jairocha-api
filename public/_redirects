@@ -1,0 +1,6 @@
+/imoveis/smart /.netlify/functions/compat 200!
+/imoveis/sync /.netlify/functions/compat 200!
+/imoveis/codigoReferenciaImovel/* /.netlify/functions/compat 200!
+/imoveis https://jairorocha.com.br/api/imoveis 200!
+/imoveis/* https://jairorocha.com.br/api/imoveis/:splat 200!
+/ /index.txt 200!

@@ -1,0 +1,7 @@
+[build]
+  command = "npm run build"
+  publish = "public"
+
+[functions]
+  node_bundler = "esbuild"
+  external_node_modules = ["@nestjs/core", "@nestjs/common", "@nestjs/platform-express", "@nestjs/swagger", "@nestjs/config", "@nestjs/axios", "class-transformer", "class-validator", "reflect-metadata", "rxjs"]
