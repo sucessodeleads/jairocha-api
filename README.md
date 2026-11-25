@@ -96,3 +96,23 @@ Nest is an MIT-licensed open source project. It can grow thanks to the sponsors 
 ## License
 
 Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+
+## Atualização automática do portal
+
+O workflow `.github/workflows/catalogo.yml` roda na branch padrão às 8h, 11h,
+14h e 17h de Recife. Quem tem acesso de escrita ao repositório também pode
+executá-lo em **Actions → Atualizar catálogo → Run workflow**.
+
+Configure os secrets `TOKEN_SMART`, `NETLIFY_SITE_ID` e `NETLIFY_AUTH_TOKEN`.
+A API consulta o CRM no primeiro acesso e compartilha o catálogo em memória por
+cinco minutos. Chamadas simultâneas reaproveitam a mesma consulta. Reiniciar o
+processo descarta a cópia local. A rota de sincronização permite atualizar a
+cópia imediatamente.
+
+O workflow compara o catálogo com a assinatura e o ID do deploy guardados no
+cache do GitHub Actions. Antes do build, confere o conteúdo da API pública.
+Após a confirmação da publicação, guarda a nova assinatura. A primeira execução
+e a perda do cache exigem uma publicação para restabelecer a referência.
+
+Para ativar, publique primeiro a API atualizada. O painel administrativo abre
+o workflow no GitHub para acompanhamento ou acionamento manual.

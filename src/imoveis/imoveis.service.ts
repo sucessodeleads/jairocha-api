@@ -1,7 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 import { SmartApiService } from './smart-api.service';
 import { ImovelSmartResponseDto } from './dto/imovel-smart-response.dto';
 import { Imovel } from './interfaces/imovel.interface';
@@ -9,27 +6,21 @@ import {
   TipoImovelId,
 } from './enums/imovel.enum';
 import { tiposImoveis, tipoPadraoImoveis } from './data/enum.data';
-import { ImoveisSmart } from './entities/imoveis-smart.entity';
-import { FotoImovelList } from './entities/foto-imovel-list.entity';
 import { SyncImoveisSmartDto } from './dto/sync-imoveis-smart.dto';
 
 @Injectable()
 export class ImoveisService {
   private readonly logger = new Logger(ImoveisService.name);
 
-  constructor(
-    @InjectRepository(ImoveisSmart)
-    private readonly imoveisSmartRepository: Repository<ImoveisSmart>,
-    @InjectRepository(FotoImovelList)
-    private readonly fotoImovelListRepository: Repository<FotoImovelList>,
-    private readonly smartApiService: SmartApiService,
-    private readonly configService: ConfigService,
-  ) {}
+  private catalog?: { rows: Imovel[]; updated: number };
+  private refreshing?: Promise<Imovel[]>;
+
+  constructor(private readonly smartApiService: SmartApiService) {}
 
   async findAllReferenceCodes(): Promise<string[]> {
     try {
       // Fetch all properties (using a large number to ensure we get all)
-      const properties = await this.findAll(999);
+      const properties = await this.findAll();
       
       // Extract and return just the reference codes
       return properties.map(prop => `${prop.tipoImovel.categoriaImovel.slug}/${prop.tipoImovel.slug}/${prop.codigoReferenciaImovel}`);
@@ -42,7 +33,7 @@ export class ImoveisService {
   async findAllId(): Promise<string[]> {
     try {
       // Fetch all properties (using a large number to ensure we get all)
-      const properties = await this.findAll(999);
+      const properties = await this.findAll();
       
       // Extract and return just the reference codes
       return properties.map(prop => `${prop.tipoImovel.categoriaImovel.slug}/${prop.tipoImovel.slug}/${prop.urlCustom}/${prop.id}`);
@@ -74,46 +65,32 @@ export class ImoveisService {
   }
 
   async syncImoveisSmart(syncDto: SyncImoveisSmartDto): Promise<{ synced: number }> {
-    try {
-      let imoveis = await this.findAllSmart(
-        syncDto.quantidadeImoveis || 999,
-        syncDto.statusImovelStr,
-        syncDto.novos,
-        syncDto.usados,
-        syncDto.tipoImovel,
-        syncDto.destaqueNoBanner,
-        syncDto.destaqueNoSite,
-      ) as unknown as ImovelSmartResponseDto[];
-      // Mapea a urlFotoDestaque para o foto destaque da lista de fotos se for NULL
-      imoveis = imoveis.map(imovel => {
-        if (!imovel.urlFotoDestaque && imovel.fotoImovelList) {
-          imovel.urlFotoDestaque = imovel.fotoImovelList.find(foto => foto.destaque === 1)?.url || imovel.fotoImovelList[0]?.url || '';
-        }
-        return imovel;
-      });
-      // Remove imóveis que tenham codigo_imovel != codigo_referencia_imovel
-      imoveis = imoveis.filter(imovel => imovel.codigoImovel === imovel.codigoReferenciaImovel);
-      
-      const qr = this.imoveisSmartRepository.manager.connection.createQueryRunner();
-      await qr.connect();
-      await qr.startTransaction();
-      try {
-        await qr.query('TRUNCATE TABLE "foto_imovel_list" RESTART IDENTITY CASCADE');
-        await qr.query('TRUNCATE TABLE "imoveis_smart" RESTART IDENTITY CASCADE');
-        await qr.commitTransaction();
-      } catch (e) {
-        await qr.rollbackTransaction();
-        throw e;
-      } finally {
-        await qr.release();
-      }
-      await this.imoveisSmartRepository.save(imoveis, {chunk: 100});
+    // Serialize explicit synchronizations, including requests with different filters.
+    while (this.refreshing) await this.refreshing.catch(() => undefined);
+    return { synced: (await this.refreshCatalog(syncDto)).length };
+  }
 
-      return { synced: imoveis.length };
-    } catch (error) {
-      this.logger.error('Erro na sincronização de imóveis:', error.stack);
-      throw error;
+  private refreshCatalog(filters: SyncImoveisSmartDto = {}): Promise<Imovel[]> {
+    this.refreshing ??= this.fetchCatalog(filters).then(rows => {
+      this.catalog = { rows, updated: Date.now() };
+      return rows;
+    }).finally(() => { this.refreshing = undefined; });
+    return this.refreshing;
+  }
+
+  private async fetchCatalog(filters: SyncImoveisSmartDto): Promise<Imovel[]> {
+    const rows = await this.findAllSmart(filters.quantidadeImoveis || 999, filters.statusImovelStr,
+      filters.novos, filters.usados, filters.tipoImovel, filters.destaqueNoBanner, filters.destaqueNoSite);
+    for (const group of ['novos', 'usados'] as const) {
+      const count = rows.filter(i => i[group]).length;
+      if (count >= 999) throw new Error('Consulta atingiu o limite do CRM: ' + group);
     }
+    const catalog = this.mapCatalog(rows);
+    if (!catalog.length || catalog.some(i => !i.id || !i.codigoReferenciaImovel)
+        || new Set(catalog.map(i => i.id)).size !== catalog.length) {
+      throw new Error('Catálogo vazio ou com identificadores inválidos.');
+    }
+    return catalog;
   }
 
   private getTipoPadraoImovel(idTipoPadraoImovel: number): any {
@@ -151,23 +128,21 @@ export class ImoveisService {
     }
   }
 
-  async findAll(
-    quantidadeImoveis = 1,
-    statusImovelStr?: 'V' | 'L',
-    novos?: boolean,
-    usados?: boolean,
-    tipoImovel?: TipoImovelId
-  ): Promise<Imovel[]> {
+  async findAll(): Promise<Imovel[]> {
+    if (this.catalog && Date.now() - this.catalog.updated < 300_000) return this.catalog.rows;
     try {
-      this.logger.log(
-        `Buscando ${quantidadeImoveis} imóveis` + 
-        (statusImovelStr ? ` com status ${statusImovelStr}` : '') +
-        (novos !== undefined ? ` (${novos ? 'novos' : 'usados'})` : '')
-      );
-      const imoveisSmart = await this.imoveisSmartRepository.find();
-      
-      // Converte ImovelSmart[] para Imovel[]
-      return imoveisSmart.map(imovelSmart => ({
+      return await this.refreshCatalog();
+    } catch (error) {
+      if (!this.catalog) throw error;
+      this.logger.warn('CRM indisponível. Servindo a última consulta válida.');
+      return this.catalog.rows;
+    }
+  }
+
+  private mapCatalog(rows: ImovelSmartResponseDto[]): Imovel[] {
+    return rows.filter(i => i.codigoImovel === i.codigoReferenciaImovel)
+      .sort((a, b) => a.id - b.id)
+      .map(imovelSmart => ({
         id: imovelSmart.id,
         codigoReferenciaImovel: imovelSmart.codigoReferenciaImovel || '',
         nomeImovel: imovelSmart.nomeImovel || '',
@@ -190,9 +165,9 @@ export class ImoveisService {
         nomeCidade: imovelSmart.nomeCidade || '',
         siglaEstado: imovelSmart.siglaEstado || '',
         nomeEstado: imovelSmart.nomeEstado || '',
-        dataCadastroImovel: imovelSmart.dataCadastroImovel || new Date().toISOString(),
-        atualizadoem: imovelSmart.atualizadoem || new Date().toISOString(),
-        dataAtualizacaoFotos: imovelSmart.dataAtualizacaoFotos || new Date().toISOString(),
+        dataCadastroImovel: imovelSmart.dataCadastroImovel || '',
+        atualizadoem: imovelSmart.atualizadoem || '',
+        dataAtualizacaoFotos: imovelSmart.dataAtualizacaoFotos || '',
         fotoImovelList: (imovelSmart.fotoImovelList || []).map(foto => ({
           nome: foto.nome || imovelSmart.nomeImovel || 'Imóvel',
           url: foto.url || '',
@@ -201,7 +176,7 @@ export class ImoveisService {
         caracteristicasImovelList: imovelSmart.caracteristicasImovelList || [],
         caracteristicasEmpreendimentoList: imovelSmart.caracteristicasEmpreendimentoList || [],
         urlCustom: imovelSmart.urlCustom || '',
-        urlFotoDestaque: imovelSmart.urlFotoDestaque || '',
+        urlFotoDestaque: imovelSmart.urlFotoDestaque || imovelSmart.fotoImovelList?.find(f => Number(f.destaque) === 1)?.url || imovelSmart.fotoImovelList?.[0]?.url || '',
         tipoPadraoImovel: imovelSmart.tipoPadraoImovel ? this.getTipoPadraoImovel(imovelSmart.tipoPadraoImovel || 0) : undefined,
         paraVenda: imovelSmart.paraVenda,
         paraLocacao: imovelSmart.paraLocacao,
@@ -210,10 +185,6 @@ export class ImoveisService {
         estagioObra: imovelSmart.estagioObra,
         situacaoEmpreendimento: imovelSmart.situacaoEmpreendimento,
       }));
-    } catch (error) {
-      this.logger.error('Erro ao buscar imóveis', error.stack);
-      throw error;
-    }
   }
 
   async findOneSmart(codigoReferenciaImovel: string): Promise<ImovelSmartResponseDto> {
@@ -227,166 +198,16 @@ export class ImoveisService {
   }
 
   async findOneById(id: string): Promise<Imovel | null> {
-    try {
-      this.logger.log(`Buscando imóvel com id ${id}`);
-      const imovelSmart = await this.imoveisSmartRepository.findOne({ where: { id: Number(id) }, relations: ['fotoImovelList'] })
-      return imovelSmart ? {
-        id: imovelSmart.id,
-        codigoReferenciaImovel: imovelSmart.codigoReferenciaImovel || '',
-        nomeImovel: imovelSmart.nomeImovel || '',
-        preco: imovelSmart.preco || 0,
-        precoLocacao: imovelSmart.precoLocacao || 0,
-        endereco: imovelSmart.endereco || '',
-        numero: imovelSmart.numero || '',
-        areaterreno: imovelSmart.areaterreno || '',
-        fotodestaque: imovelSmart.fotodestaque || 0,
-        destaque: imovelSmart.destaque || '0',
-        destaquebanner: imovelSmart.destaquebanner || '0',
-        localizacao: imovelSmart.localizacao || '',
-        complemento: imovelSmart.complemento || '',
-        descricao: imovelSmart.descricao || '',
-        tipoImovel: this.getTipoImovel(Number(imovelSmart.idTipoImovel) || 0, imovelSmart.tipoImovel || '', imovelSmart.categoria || ''),
-        nomeBairro: imovelSmart.nomeBairro || '',
-        nomeCidade: imovelSmart.nomeCidade || '',
-        siglaEstado: imovelSmart.siglaEstado || '',
-        nomeEstado: imovelSmart.nomeEstado || '',
-        dataCadastroImovel: imovelSmart.dataCadastroImovel || new Date().toISOString(),
-        atualizadoem: imovelSmart.atualizadoem || new Date().toISOString(),
-        dataAtualizacaoFotos: imovelSmart.dataAtualizacaoFotos || new Date().toISOString(),
-        fotoImovelList: (imovelSmart.fotoImovelList || []).map(foto => ({
-          nome: foto.nome || imovelSmart.nomeImovel || 'Imóvel',
-          url: foto.url || '',
-        })),
-        tourVirtual: imovelSmart.tourVirtual || '',
-        caracteristicasImovelList: imovelSmart.caracteristicasImovelList || [],
-        caracteristicasEmpreendimentoList: imovelSmart.caracteristicasEmpreendimentoList || [],
-        urlCustom: imovelSmart.urlCustom || '',
-        urlFotoDestaque: imovelSmart.urlFotoDestaque || '',
-        tipoPadraoImovel: imovelSmart.tipoPadraoImovel ? this.getTipoPadraoImovel(imovelSmart.tipoPadraoImovel || 0) : undefined,
-        paraVenda: imovelSmart.paraVenda,
-        paraLocacao: imovelSmart.paraLocacao,
-        novos: imovelSmart.novos,
-        usados: imovelSmart.usados,
-        estagioObra: imovelSmart.estagioObra,
-        situacaoEmpreendimento: imovelSmart.situacaoEmpreendimento,
-      } : null;
-    } catch (error) {
-      this.logger.error('Erro ao buscar imóveis', error.stack);
-      throw error;
-    }
+    return (await this.findAll()).find(i => Number(i.id) === Number(id)) ?? null;
   }
 
   async findByTipoImovel(tipoImovel: TipoImovelId): Promise<Imovel[]> {
-    try {
-      this.logger.log(`Buscando imóveis com tipo ${tipoImovel}`);
-      const imoveisSmart = await this.imoveisSmartRepository.find({ where: { idTipoImovel: tipoImovel.toString() } });
-      // Converte ImovelSmart[] para Imovel[]
-      return imoveisSmart.map(imovelSmart => ({
-        id: imovelSmart.id,
-        codigoReferenciaImovel: imovelSmart.codigoReferenciaImovel || '',
-        nomeImovel: imovelSmart.nomeImovel || '',
-        preco: imovelSmart.preco || 0,
-        precoLocacao: imovelSmart.precoLocacao || 0,
-        endereco: imovelSmart.endereco || '',
-        numero: imovelSmart.numero || '',
-        nquartos: imovelSmart.nquartos || '',
-        nsuites: imovelSmart.nsuites || '',
-        ngaragens: imovelSmart.ngaragens || '',
-        areaterreno: imovelSmart.areaterreno || '',
-        fotodestaque: imovelSmart.fotodestaque || 0,
-        destaque: imovelSmart.destaque || '0',
-        destaquebanner: imovelSmart.destaquebanner || '0',
-        localizacao: imovelSmart.localizacao || '',
-        complemento: imovelSmart.complemento || '',
-        descricao: imovelSmart.descricao || '',
-        tipoImovel: this.getTipoImovel(Number(imovelSmart.idTipoImovel) || 0, imovelSmart.tipoImovel || '', imovelSmart.categoria || ''),
-        nomeBairro: imovelSmart.nomeBairro || '',
-        nomeCidade: imovelSmart.nomeCidade || '',
-        siglaEstado: imovelSmart.siglaEstado || '',
-        nomeEstado: imovelSmart.nomeEstado || '',
-        dataCadastroImovel: imovelSmart.dataCadastroImovel || new Date().toISOString(),
-        atualizadoem: imovelSmart.atualizadoem || new Date().toISOString(),
-        dataAtualizacaoFotos: imovelSmart.dataAtualizacaoFotos || new Date().toISOString(),
-        fotoImovelList: (imovelSmart.fotoImovelList || []).map(foto => ({
-          nome: foto.nome || imovelSmart.nomeImovel || 'Imóvel',
-          url: foto.url || '',
-        })),
-        tourVirtual: imovelSmart.tourVirtual || '',
-        caracteristicasImovelList: imovelSmart.caracteristicasImovelList || [],
-        caracteristicasEmpreendimentoList: imovelSmart.caracteristicasEmpreendimentoList || [],
-        urlCustom: imovelSmart.urlCustom || '',
-        urlFotoDestaque: imovelSmart.urlFotoDestaque || '',
-        tipoPadraoImovel: imovelSmart.tipoPadraoImovel ? this.getTipoPadraoImovel(imovelSmart.tipoPadraoImovel || 0) : undefined,
-        paraVenda: imovelSmart.paraVenda,
-        paraLocacao: imovelSmart.paraLocacao,
-        novos: imovelSmart.novos,
-        usados: imovelSmart.usados,
-        estagioObra: imovelSmart.estagioObra,
-        situacaoEmpreendimento: imovelSmart.situacaoEmpreendimento,
-      }));
-    } catch (error) {
-      this.logger.error('Erro ao buscar imóveis', error.stack);
-      throw error;
-    }
+    const tipos = String(tipoImovel).split(';').map(Number);
+    return (await this.findAll()).filter(i => tipos.includes(i.tipoImovel.id));
   }
 
-  async findByDestaqueOrDestaqueNoBanner(destaqueOrDestaqueNoBanner: boolean): Promise<Imovel[]> {
-    try {
-      this.logger.log(`Buscando imóveis com destaque no banner ${destaqueOrDestaqueNoBanner}`);
-      const valorDestaque = destaqueOrDestaqueNoBanner ? '1' : '0';
-      const imoveisSmart = await this.imoveisSmartRepository.find({
-        where: [
-          { destaquebanner: valorDestaque },
-          { destaque: valorDestaque },
-        ],
-      });
-      // Converte ImovelSmart[] para Imovel[]
-      return imoveisSmart.map(imovelSmart => ({
-        id: imovelSmart.id,
-        codigoReferenciaImovel: imovelSmart.codigoReferenciaImovel || '',
-        nomeImovel: imovelSmart.nomeImovel || '',
-        preco: imovelSmart.preco || 0,
-        precoLocacao: imovelSmart.precoLocacao || 0,
-        endereco: imovelSmart.endereco || '',
-        numero: imovelSmart.numero || '',
-        nquartos: imovelSmart.nquartos || '',
-        nsuites: imovelSmart.nsuites || '',
-        ngaragens: imovelSmart.ngaragens || '',
-        areaterreno: imovelSmart.areaterreno || '',
-        fotodestaque: imovelSmart.fotodestaque || 0,
-        destaque: imovelSmart.destaque || '0',
-        destaquebanner: imovelSmart.destaquebanner || '0',
-        localizacao: imovelSmart.localizacao || '',
-        complemento: imovelSmart.complemento || '',
-        descricao: imovelSmart.descricao || '',
-        tipoImovel: this.getTipoImovel(Number(imovelSmart.idTipoImovel) || 0, imovelSmart.tipoImovel || '', imovelSmart.categoria || ''),
-        nomeBairro: imovelSmart.nomeBairro || '',
-        nomeCidade: imovelSmart.nomeCidade || '',
-        siglaEstado: imovelSmart.siglaEstado || '',
-        nomeEstado: imovelSmart.nomeEstado || '',
-        dataCadastroImovel: imovelSmart.dataCadastroImovel || new Date().toISOString(),
-        atualizadoem: imovelSmart.atualizadoem || new Date().toISOString(),
-        dataAtualizacaoFotos: imovelSmart.dataAtualizacaoFotos || new Date().toISOString(),
-        fotoImovelList: (imovelSmart.fotoImovelList || []).map(foto => ({
-          nome: foto.nome || imovelSmart.nomeImovel || 'Imóvel',
-          url: foto.url || '',
-        })),
-        tourVirtual: imovelSmart.tourVirtual || '',
-        caracteristicasImovelList: imovelSmart.caracteristicasImovelList || [],
-        caracteristicasEmpreendimentoList: imovelSmart.caracteristicasEmpreendimentoList || [],
-        urlCustom: imovelSmart.urlCustom || '',
-        urlFotoDestaque: imovelSmart.urlFotoDestaque || '',
-        tipoPadraoImovel: imovelSmart.tipoPadraoImovel ? this.getTipoPadraoImovel(imovelSmart.tipoPadraoImovel || 0) : undefined,
-        paraVenda: imovelSmart.paraVenda,
-        paraLocacao: imovelSmart.paraLocacao,
-        novos: imovelSmart.novos,
-        usados: imovelSmart.usados,
-        estagioObra: imovelSmart.estagioObra,
-        situacaoEmpreendimento: imovelSmart.situacaoEmpreendimento,
-      }));
-    } catch (error) {
-      this.logger.error('Erro ao buscar imóveis', error.stack);
-      throw error;
-    }
+  async findByDestaqueOrDestaqueNoBanner(destaque: boolean): Promise<Imovel[]> {
+    const flag = String(destaque) === 'true' ? '1' : '0';
+    return (await this.findAll()).filter(i => String(i.destaque) === flag || String(i.destaquebanner) === flag);
   }
 }

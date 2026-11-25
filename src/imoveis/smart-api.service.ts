@@ -11,7 +11,7 @@ import { TipoImovelId } from './enums/imovel.enum';
 export class SmartApiService {
   private readonly logger = new Logger(SmartApiService.name);
   private readonly apiUrlSmart    = 'https://app.smart.youdigital.com.br/sites/v1/imovel/listarImoveisFiltro';
-  private readonly apiUrlSmartOne = 'http://app.smart.youdigital.com.br/sites/v1/imovel/listarImoveisLista';
+  private readonly apiUrlSmartOne = 'https://app.smart.youdigital.com.br/sites/v1/imovel/listarImoveisLista';
 
   constructor(
     private readonly httpService: HttpService,
@@ -57,7 +57,8 @@ export class SmartApiService {
       )
     );
     
-    return response.data.imoveis || [];
+    if (!Array.isArray(response.data?.imoveis)) throw new Error('Resposta inválida do CRM.');
+    return response.data.imoveis;
   }
 
   private async fetchImoveisOne(token: string, codigos: string): Promise<any[]> {

@@ -5,7 +5,6 @@ import { Imovel } from './interfaces/imovel.interface';
 import { ImovelSmartResponseDto } from './dto/imovel-smart-response.dto';
 import { TipoImovelId } from './enums/imovel.enum';
 import { SyncImoveisSmartDto } from './dto/sync-imoveis-smart.dto';
-import { ImoveisSmart } from './entities/imoveis-smart.entity';
 
 @ApiTags('imoveis')
 @Controller('imoveis')
@@ -34,7 +33,7 @@ export class ImoveisController {
         (statusImovelStr ? ` com status ${statusImovelStr}` : '') +
         (novos !== undefined ? ` (${novos ? 'novos' : 'usados'})` : '')
       );
-      return await this.imoveisService.findAll(quantidadeImoveis, statusImovelStr, novos, usados, tipoImovel);
+      return await this.imoveisService.findAll();
     } catch (error) {
       this.logger.error('Erro ao buscar imóveis', error.stack);
       throw error;
@@ -76,7 +75,7 @@ export class ImoveisController {
   }
 
   @Post('sync')
-  @ApiOperation({ summary: 'Sincroniza imóveis da Smart API com o banco de dados' })
+  @ApiOperation({ summary: 'Sincroniza imóveis da Smart API no catálogo em memória' })
   @ApiResponse({
     status: 201,
     description: 'Imóveis sincronizados com sucesso',
@@ -95,7 +94,7 @@ export class ImoveisController {
   }
 
   @Get('sync')
-  @ApiOperation({ summary: 'Sincroniza todos os imóveis da Smart API com o banco de dados' })
+  @ApiOperation({ summary: 'Sincroniza todos os imóveis da Smart API no catálogo em memória' })
   @ApiResponse({
     status: 201,
     description: 'Imóveis sincronizados com sucesso',

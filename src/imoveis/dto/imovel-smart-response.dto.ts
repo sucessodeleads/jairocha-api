@@ -1,3 +1,4 @@
+import { EstagioObraId, SituacaoEmpreendimentoId } from '../enums/imovel.enum';
 import { ApiProperty } from '@nestjs/swagger';
 import { Exclude, Expose } from 'class-transformer';
 import { FotoImovelSmartDto } from './foto-imovel-smart.dto';
@@ -5,6 +6,12 @@ import { FotoImovelSmartDto } from './foto-imovel-smart.dto';
 @Exclude()
 
 export class ImovelSmartResponseDto {
+  @Expose()
+  estagioObra?: EstagioObraId;
+
+  @Expose()
+  situacaoEmpreendimento?: SituacaoEmpreendimentoId;
+
 
   @Expose()
   @ApiProperty({ description: 'ID único do imóvel' })
