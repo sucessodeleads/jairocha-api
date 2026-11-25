@@ -1,4 +1,4 @@
-import { appendFile, readFile, writeFile } from 'node:fs/promises';
+import { getStore } from '@netlify/blobs';
 import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { NestFactory } from '@nestjs/core';
@@ -25,33 +25,24 @@ async function run() {
     const digest = (rows: unknown) => createHash('sha256').update(JSON.stringify(rows)).digest('hex');
     const hash = digest(catalog);
     const site = encodeURIComponent(process.env.NETLIFY_SITE_ID!);
-    const current = await netlify('/sites/' + site);
-    const statePath = '.catalog-publicado';
-    const previous = await readFile(statePath, 'utf8').catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== 'ENOENT') throw error;
-      return '';
-    });
-    if (previous === hash + ' ' + current.published_deploy?.id) {
+    const versionUrl = 'https://jairorocha.com.br/catalogo-versao.txt';
+    const version = await fetch(versionUrl, { signal: AbortSignal.timeout(30_000) });
+    if (version.ok && (await version.text()).trim() === hash) {
       console.log('Catálogo já publicado.');
       return;
     }
-    // O build consome a API pública. Confira também preço, fotos e destaques.
-    const response = await fetch('https://api.jairorocha.com.br/imoveis', {
-      signal: AbortSignal.timeout(120_000),
-    });
-    if (!response.ok || digest(await response.json()) !== hash) {
-      throw new Error('O catálogo da API diverge do CRM. Nova tentativa na próxima execução.');
-    }
+    if (!version.ok && version.status !== 404) throw new Error('Falha ao verificar a versão publicada.');
+    const store = getStore({ name: 'catalogo-portal', siteID: process.env.NETLIFY_SITE_ID!,
+      token: process.env.NETLIFY_AUTH_TOKEN!, consistency: 'strong' });
+    await store.setJSON('imoveis', catalog);
     const build = await netlify('/sites/' + site + '/builds', 'POST');
     if (!build.deploy_id) throw new Error('Netlify não retornou o identificador do deploy.');
     for (let attempt = 0; attempt < 80; attempt++) {
       const deploy = await netlify('/deploys/' + encodeURIComponent(build.deploy_id));
       if (deploy.state === 'error' || deploy.state === 'canceled') throw new Error('Deploy interrompido.');
       if (deploy.state === 'ready' && deploy.published_at && deploy.context === 'production') {
-        await writeFile(statePath, hash + ' ' + build.deploy_id);
-        if (process.env.GITHUB_OUTPUT) {
-          await appendFile(process.env.GITHUB_OUTPUT, 'published=true\n');
-        }
+        const published = await fetch(versionUrl, { signal: AbortSignal.timeout(30_000) });
+        if (!published.ok || (await published.text()).trim() !== hash) throw new Error('Versão publicada divergente.');
         console.log('Publicado: ' + catalog.length + ' imóveis.');
         return;
       }

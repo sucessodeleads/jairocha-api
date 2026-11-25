@@ -109,10 +109,7 @@ cinco minutos. Chamadas simultâneas reaproveitam a mesma consulta. Reiniciar o
 processo descarta a cópia local. A rota de sincronização permite atualizar a
 cópia imediatamente.
 
-O workflow compara o catálogo com a assinatura e o ID do deploy guardados no
-cache do GitHub Actions. Antes do build, confere o conteúdo da API pública.
-Após a confirmação da publicação, guarda a nova assinatura. A primeira execução
-e a perda do cache exigem uma publicação para restabelecer a referência.
-
-Para ativar, publique primeiro a API atualizada. O painel administrativo abre
-o workflow no GitHub para acompanhamento ou acionamento manual.
+O workflow compara o catálogo com a assinatura publicada no portal. Quando os dados
+mudam, salva a nova versão no Netlify Blobs, solicita o build e confirma a
+assinatura após o deploy. O portal pré-renderiza as páginas usando essa mesma
+versão, e a Netlify Function em `/api/imoveis` atende o portal e o painel.
